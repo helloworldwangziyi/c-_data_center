@@ -113,8 +113,6 @@ int main(int argc,char *argv[])
 // 把站点参数文件中加载到vstcode容器中。 
 bool LoadSTCode(const char *inifile)
 {
-  CFile File;
-
   // 打开站点参数文件。
   if (File.Open(inifile,"r")==false)
   {
