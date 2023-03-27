@@ -5,6 +5,8 @@
 
 #include "_public.h"
 
+CPActive PActive;   // 进程心跳。
+
 // 全国气象站点参数结构体。
 struct st_stcode
 {
@@ -43,26 +45,37 @@ char strddatetime[21]; // 观测数据的时间。
 // 模拟生成全国气象站点分钟观测数据，存放在vsurfdata容器中。
 void CrtSurfData();
 
+CFile File;
+
 // 把容器vsurfdata中的全国气象站点分钟观测数据写入文件。
 bool CrtSurfFile(const char *outpath,const char *datafmt);
 
 CLogFile logfile;    // 日志类。
 
+void EXIT(int sig);  // 程序退出和信号2、15的处理函数。
+
 int main(int argc,char *argv[])
 {
-  if (argc!=5) 
+  if ( (argc!=5) && (argc!=6) )
   {
     // 如果参数非法，给出帮助文档。
-    printf("Using:./crtsurfdata inifile outpath logfile datafmt\n");
-    printf("Example:/project/idc1/bin/crtsurfdata /project/idc1/ini/stcode.ini /tmp/idc/surfdata /log/idc/crtsurfdata.log xml,json,csv\n\n");
+    printf("Using:./crtsurfdata inifile outpath logfile datafmt [datetime]\n");
+    printf("Example:/project/idc1/bin/crtsurfdata /project/idc1/ini/stcode.ini /tmp/idc/surfdata /log/idc/crtsurfdata.log xml,json,csv\n");
+    printf("        /project/idc1/bin/crtsurfdata /project/idc1/ini/stcode.ini /tmp/idc/surfdata /log/idc/crtsurfdata.log xml,json,csv 20210710123000\n");
+    printf("        /project/tools1/bin/procctl 60 /project/idc1/bin/crtsurfdata /project/idc1/ini/stcode.ini /tmp/idc/surfdata /log/idc/crtsurfdata.log xml,json,csv\n\n\n");
 
-    printf("inifile 全国气象站点参数文件名。\n");
-    printf("outpath 全国气象站点数据文件存放的目录。\n");
-    printf("logfile 本程序运行的日志文件名。\n");
-    printf("datafmt 生成数据文件的格式，支持xml、json和csv三种格式，中间用逗号分隔。\n\n");
+    printf("inifile  全国气象站点参数文件名。\n");
+    printf("outpath  全国气象站点数据文件存放的目录。\n");
+    printf("logfile  本程序运行的日志文件名。\n");
+    printf("datafmt  生成数据文件的格式，支持xml、json和csv三种格式，中间用逗号分隔。\n");
+    printf("datetime 这是一个可选参数，表示生成指定时间的数据和文件。\n\n\n");
 
     return -1;
   }
+  // 关闭全部的信号和输入输出。
+  // 设置信号,在shell状态下可用 "kill + 进程号" 正常终止些进程。
+  // 但请不要用 "kill -9 +进程号" 强行终止。
+  CloseIOAndSignal(true); signal(SIGINT,EXIT);  signal(SIGTERM,EXIT);
 
   // 打开程序的日志文件。
   if (logfile.Open(argv[3],"a+",false)==false)
@@ -72,9 +85,17 @@ int main(int argc,char *argv[])
 
   logfile.Write("crtsurfdata 开始运行。\n");
 
+  PActive.AddPInfo(20,"crtsurfdata");
+
   // 把站点参数文件中加载到vstcode容器中。 
   if (LoadSTCode(argv[1])==false) return -1;
 
+  // 获取当前时间，当作观测时间。
+  memset(strddatetime,0,sizeof(strddatetime));
+  if (argc==5)
+    LocalTime(strddatetime,"yyyymmddhh24miss");
+  else
+    STRCPY(strddatetime,sizeof(strddatetime),argv[5]);
 
   // 模拟生成全国气象站点分钟观测数据，存放在vsurfdata容器中。
   CrtSurfData();
@@ -146,10 +167,6 @@ void CrtSurfData()
   // 播随机数种子。
   srand(time(0));
 
-  // 获取当前时间，当作观测时间。
-  memset(strddatetime,0,sizeof(strddatetime));
-  LocalTime(strddatetime,"yyyymmddhh24miss");
-
   struct st_surfdata stsurfdata;
 
   // 遍历气象站点参数的vstcode容器。
@@ -176,8 +193,6 @@ void CrtSurfData()
 // 把容器vsurfdata中的全国气象站点分钟观测数据写入文件。
 bool CrtSurfFile(const char *outpath,const char *datafmt)
 {
-  CFile File;
-
   // 拼接生成数据的文件名，例如：/tmp/idc/surfdata/SURF_ZH_20210629092200_2254.csv
   char strFileName[301];
   sprintf(strFileName,"%s/SURF_ZH_%s_%d.%s",outpath,strddatetime,getpid(),datafmt);
@@ -188,8 +203,9 @@ bool CrtSurfFile(const char *outpath,const char *datafmt)
     logfile.Write("File.OpenForRename(%s) failed.\n",strFileName); return false;
   }
 
-  // 写入第一行标题。
   if (strcmp(datafmt,"csv")==0) File.Fprintf("站点代码,数据时间,气温,气压,相对湿度,风向,风速,降雨量,能见度\n");
+  if (strcmp(datafmt,"xml")==0) File.Fprintf("<data>\n");
+  if (strcmp(datafmt,"json")==0) File.Fprintf("{\"data\":[\n");
 
   // 遍历存放观测数据的vsurfdata容器。
   for (int ii=0;ii<vsurfdata.size();ii++)
@@ -221,7 +237,17 @@ bool CrtSurfFile(const char *outpath,const char *datafmt)
   // 关闭文件。
   File.CloseAndRename();
 
+  UTime(strFileName,strddatetime);  // 修改文件的时间属性。
+
   logfile.Write("生成数据文件%s成功，数据时间%s，记录数%d。\n",strFileName,strddatetime,vsurfdata.size());
 
   return true;
+}
+
+// 程序退出和信号2、15的处理函数。
+void EXIT(int sig)  
+{
+  logfile.Write("程序退出，sig=%d\n\n",sig);
+
+  exit(0);
 }
