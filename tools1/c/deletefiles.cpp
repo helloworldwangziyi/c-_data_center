@@ -57,3 +57,10 @@ printf("=%s=\n",Dir.m_FullFileName);
 
   return 0;
 }
+
+void EXIT(int sig)
+{
+  printf("程序退出，sig=%d\n\n",sig);
+
+  exit(0);
+}
